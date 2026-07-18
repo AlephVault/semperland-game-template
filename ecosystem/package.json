@@ -1,0 +1,28 @@
+{
+  "name": "ecosystem",
+  "version": "1.0.0",
+  "description": "The ecosystem for a Semperland game.",
+  "keywords": [
+    "Semperland",
+    "Hardhat",
+    "Web3"
+  ],
+  "homepage": "https://github.com/AlephVault/semperland-game-template#readme",
+  "bugs": {
+    "url": "https://github.com/AlephVault/semperland-game-template/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlephVault/semperland-game-template.git"
+  },
+  "license": "MIT",
+  "author": "Luis Masuelli",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"tests are not implemented\" && exit 1"
+  },
+  "dependencies": {
+    "hardhat": "^2.28.6"
+  }
+}
