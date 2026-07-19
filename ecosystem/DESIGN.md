@@ -163,4 +163,88 @@ the name is empty). Registering a new traits lot causes a bump the nextLotId var
 
 Also, first, the lot must be registered and THEN the contents of `availableTraits` can be populated.
 Doing otherwise will cause a revert. Populating `availableTraits` is also reserved for the same roles
-(i.e. administrative roles) that create lots.
+(i.e. administrative roles) that create lots. Each value in the available traits, which is regarded as
+`colors`, and it is an integer. This integer is encoded as:
+
+`[8bit: N: length -> 0 to 10][8bit: element 1]...[8bit: element N][8*(31 - N)bit: zero-padding]`
+
+telling all the colors that are available for this object in particular in this lot. For example, the
+number 0x0a0001020304050607080900000...00000 (a 256-bit number) means all the 10 colors are selected.
+
+**Just note**: Resolvers will download the .ZIP files. They will compute a consistent hash and only keep
+the file in the case the hash is new (i.e. does not belong to a previously downloaded file).
+
+So each lot is, essentially, an authorization of a Persona to select certain traits. Many lots may have
+an intersection of stuff they allow, while referencing the same file.
+
+Now, it happens that a Persona will be allowed by the administrator to one or more lots. This involves:
+
+- On this contract's construction, lot 1 will be registered with:
+  - name: "Default"
+  - url: "local://default"
+  - available traits:
+    - `[1][Male][Arms][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Arms][8]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Boots][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Boots][3]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Chest][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Chest][3]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Hair][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Hair][15]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][HairTail][7]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Hat][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Hat][7]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][LongShirt][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][LongShirt][9]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Pants][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Pants][5]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Shirt][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Shirt][11]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Shoulder][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Shoulder][13]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Waist][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Waist][4]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Arms][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Arms][7]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Boots][1]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Chest][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Chest][3]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Hair][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Hair][15]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][HairTail][7]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][HairTail][13]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Hat][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Hat][8]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][LongShirt][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][LongShirt][9]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Pants][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Pants][10]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Shirt][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Shirt][17]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Female][Shoulder][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Female][Shoulder][7]` = `0x0a0001020304050607080900000...00000`
+    - `[1][Male][Waist][1]` = `0x0a0001020304050607080900000...00000`
+    - ...
+    - `[1][Male][Waist][2]` = `0x0a0001020304050607080900000...00000`
+- On persona creation, the lot 1 will be allowed by default.
+
+TODO: Add logic for persona creation (own and delegated), with caveats for the size of the input data.
+TODO: This also involves delegated creation via an EIP-712 signature.
