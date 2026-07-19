@@ -31,7 +31,7 @@ So a central record will exist to hold each Persona created for an address with 
     // The different trait types. The body is always resolved from the default
     // lot (which here will be known as lot id 1) in front-end. The `Cloth`
     // category will be, however, unknown / empty to the default lot.
-    enum TraitType { Arms, Boots, Chest, Hair, HairTail, Hat, LongShirt, Pants, Shirt, Shoulder, Waist, Cloth }
+    enum TraitType { Arms, Boots, Chest, Hair, HairTail, Hat, LongShirt, Pants, Shirt, Shoulder, Waist, Cloth, Necklace, Cloak }
 
     // The rendering of a persona (visual aspects of an account).
     struct Persona {
@@ -138,6 +138,8 @@ is that this .zip file will have the following structure:
             Shirt/
             Shoulder/
             Waist/
+            Necklace/
+            Cloak/
         Female/
             Arms/
             Boots/
@@ -150,6 +152,8 @@ is that this .zip file will have the following structure:
             Shirt/
             Shoulder/
             Waist/
+            Necklace/
+            Cloak/
 
 where all the directories are optional. This is only considered in front-end (the smart contracts only
 include the URL). The URLs can be in many formats:
