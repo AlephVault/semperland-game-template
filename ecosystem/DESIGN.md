@@ -4,6 +4,11 @@ users will be able to deploy this as well in their local networks.
 The underlying idea is to tie an aesthetic to each address to define some sort of Persona linked to the address.
 So a central record will exist to hold each Persona created for an address with something like this:
 
+    // The color for a trait. Only 10 elements.
+    enum Color {
+	    Black, Blue, DarkBrown, Green, LightBrown, Pink, Purple, Red, White, Yellow
+    }
+
     // A trait is an element to render. It can be a cloth, a body, a hair, ...
     // It should be understood that lotId being 0 means nothing is selected.
     // The first lotId is 1, and will per-deployment (i.e. per-data) stand for
@@ -11,14 +16,14 @@ So a central record will exist to hold each Persona created for an address with 
     struct Trait {
         uint128 lotId;
         uint120 itemId;
-        uint8 color;
+        Color color;
     }
 
     // The sex.
     enum Sex { Male, Female }
 
     // The body color. Male and female have access to images of the same values.
-    enum Body { Black, Orange, White, Purple, Yellow, Red, Green, Blue }
+    enum Body { White, Black, Yellow, Orange, Blue, Red, Green, Purple }
 
     // Whether the character uses simple or standard clothes.
     enum ClothType { Standard, Simple }
@@ -76,4 +81,5 @@ in this structure (the attributes map to something defined in the AlephVault.Win
 The goal is to store the global aesthetics of a persona (profile for an account) in a specific contract
 in the Polygon network.
 
-So in order to tell what can a persona wear or not, first the lots must be defined:
+So in order to tell what can a persona wear or not, first the lots must be defined. They're an array of
+things that can only be added (never removed):
