@@ -4,6 +4,10 @@ pragma solidity ^0.8.28;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
+/// @title Semperland persona registry.
+/// @notice Stores one visual identity per address, with admin-controlled trait lots.
+/// @dev This contract intentionally stores only identity/aesthetic metadata. Asset URL contents,
+///      URL syntax, ZIP validity, and renderer compatibility are enforced off-chain by clients.
 contract SemperlandPersona is Ownable {
     enum Color {
         Black,
@@ -57,11 +61,14 @@ contract SemperlandPersona is Ownable {
     }
 
     struct Trait {
+        /// @dev `0` means no object is selected. If non-zero, `itemId` must be non-zero and authorized.
         uint128 lotId;
         uint120 itemId;
         Color color;
     }
 
+    /// @notice Base persona record. The name is normalized to lowercase before storage.
+    /// @dev Body is an enum value, not a trait lot entry. Optional traits use `Trait.lotId == 0`.
     struct Persona {
         string name;
         Sex sex;
@@ -73,10 +80,12 @@ contract SemperlandPersona is Ownable {
         Trait hat;
     }
 
+    /// @notice Simple clothing mode payload. Required exactly once when `Persona.clothType == Simple`.
     struct SimpleClothing {
         Trait cloth;
     }
 
+    /// @notice Standard clothing mode payload. Required exactly once when `Persona.clothType == Standard`.
     struct StandardClothing {
         Trait boots;
         Trait pants;
@@ -90,11 +99,15 @@ contract SemperlandPersona is Ownable {
         bool bootsOverPants;
     }
 
+    /// @notice Metadata for a trait lot.
+    /// @dev An empty `name` denotes an unregistered lot. The `url` is opaque and never syntax-checked.
     struct TraitsLot {
         string name;
         string url;
     }
 
+    /// @notice Constructor/admin input for trait availability.
+    /// @dev `colors` is a bitset over the 10 `Color` enum values and must fit in `ALL_COLORS`.
     struct TraitAvailability {
         Sex sex;
         TraitType traitType;
@@ -102,6 +115,7 @@ contract SemperlandPersona is Ownable {
         uint256 colors;
     }
 
+    /// @dev Compact internal form used when hashing delegated EIP-712 requests.
     struct Delegation {
         uint256 validSince;
         uint256 validUntil;
@@ -110,6 +124,10 @@ contract SemperlandPersona is Ownable {
         bytes32 authDataHash;
     }
 
+    /// @notice Signature envelope for delegated `*For` methods.
+    /// @dev `signatureScheme == SIGNATURE_SCHEME_ECDSA` is the only implemented scheme today.
+    ///      `authData` is hashed into the signed payload so later schemes can bind extra public
+    ///      keys, algorithm identifiers, or verifier metadata without changing the method ABI.
     struct SignatureAuthorization {
         uint256 validSince;
         uint256 validUntil;
@@ -152,15 +170,24 @@ contract SemperlandPersona is Ownable {
 
     uint128 public nextLotId;
 
+    /// @notice Maps normalized persona names to their owning account.
     mapping(string normalizedName => address owner) public personasNames;
+    /// @notice Maps an account to its current persona. Empty `name` means no registered persona.
     mapping(address account => Persona persona) public personas;
+    /// @notice Simple clothing payloads for accounts currently using simple clothing.
     mapping(address account => SimpleClothing simpleClothing) public simpleClothing;
+    /// @notice Standard clothing payloads for accounts currently using standard clothing.
     mapping(address account => StandardClothing standardClothing) public standardClothing;
+    /// @notice Registered trait lots. Lot ids are append-only and never removed.
     mapping(uint128 lotId => TraitsLot lot) public lots;
+    /// @notice Authorized trait/color bitsets by lot, sex, trait type, and trait id.
     mapping(uint128 lotId => mapping(Sex sex => mapping(TraitType traitType => mapping(uint120 traitId => uint256 colors))))
         public availableTraits;
+    /// @notice Lots allowed to every persona by default.
     mapping(uint128 lotId => bool isDefault) public defaultLots;
+    /// @notice Additional lots allowed to a specific account.
     mapping(address account => mapping(uint128 lotId => bool isAllowed)) public allowedLots;
+    /// @notice Replay-protection nonce for each account's delegated actions.
     mapping(address account => uint256 nonce) public nonces;
 
     bytes32 private immutable _domainSeparator;
@@ -194,6 +221,10 @@ contract SemperlandPersona is Ownable {
     event PersonaUpdated(address indexed account);
     event PersonaNameChanged(address indexed account, string oldNormalizedName, string newNormalizedName);
 
+    /// @notice Deploys the registry, registers lot 1 as `Default`, and seeds its trait table.
+    /// @dev The constructor takes the default trait table to avoid bloating deployment bytecode.
+    ///      The deployer becomes the owner and can later manage lots and trait availability.
+    /// @param defaultTraits Trait/color entries to OR into default lot 1.
     constructor(TraitAvailability[] memory defaultTraits)
         Ownable(msg.sender)
     {
@@ -210,6 +241,13 @@ contract SemperlandPersona is Ownable {
         }
     }
 
+    /// @notice Registers the caller's persona.
+    /// @dev Reverts if the caller already has a persona, if the normalized name is already taken,
+    ///      if the name format is invalid, if the clothing payload does not match `clothType`,
+    ///      or if any non-empty trait is not authorized by a default or caller-allowed lot.
+    /// @param persona Persona data to store. `persona.name` is normalized before storage.
+    /// @param simpleClothing_ Must contain exactly one item for simple clothing, otherwise empty.
+    /// @param standardClothing_ Must contain exactly one item for standard clothing, otherwise empty.
     function register(
         Persona memory persona,
         SimpleClothing[] memory simpleClothing_,
@@ -218,6 +256,15 @@ contract SemperlandPersona is Ownable {
         _registerFor(msg.sender, persona, simpleClothing_, standardClothing_);
     }
 
+    /// @notice Registers a persona for `target` using a signed authorization from `target`.
+    /// @dev Anyone may submit the transaction. The target signs the normalized persona/name,
+    ///      clothing hashes, validity window, current nonce, signature scheme, and auth-data hash.
+    ///      A successful call increments `nonces[target]`, making the signature single-use.
+    /// @param target Account receiving the persona.
+    /// @param persona Persona data to store for `target`.
+    /// @param simpleClothing_ Simple clothing payload, constrained by `persona.clothType`.
+    /// @param standardClothing_ Standard clothing payload, constrained by `persona.clothType`.
+    /// @param authorization Signature envelope and validity window.
     function registerFor(
         address target,
         Persona memory persona,
@@ -231,6 +278,12 @@ contract SemperlandPersona is Ownable {
         _registerFor(target, persona, simpleClothing_, standardClothing_);
     }
 
+    /// @notice Updates the caller's persona traits, body, sex, and clothing mode.
+    /// @dev The stored name is preserved; use `changeName` to update it. The caller must already
+    ///      have a persona, and all trait/clothing validation rules are re-applied.
+    /// @param persona New persona data. `persona.name` is ignored.
+    /// @param simpleClothing_ Must contain exactly one item for simple clothing, otherwise empty.
+    /// @param standardClothing_ Must contain exactly one item for standard clothing, otherwise empty.
     function update(
         Persona memory persona,
         SimpleClothing[] memory simpleClothing_,
@@ -239,6 +292,15 @@ contract SemperlandPersona is Ownable {
         _updateFor(msg.sender, persona, simpleClothing_, standardClothing_);
     }
 
+    /// @notice Updates a persona for `target` using a signed authorization from `target`.
+    /// @dev Anyone may submit the transaction. The target signs the persona without the name,
+    ///      clothing hashes, validity window, current nonce, signature scheme, and auth-data hash.
+    ///      A successful call increments `nonces[target]`, making the signature single-use.
+    /// @param target Account whose persona is updated.
+    /// @param persona New persona data. `persona.name` is ignored.
+    /// @param simpleClothing_ Simple clothing payload, constrained by `persona.clothType`.
+    /// @param standardClothing_ Standard clothing payload, constrained by `persona.clothType`.
+    /// @param authorization Signature envelope and validity window.
     function updateFor(
         address target,
         Persona memory persona,
@@ -252,10 +314,21 @@ contract SemperlandPersona is Ownable {
         _updateFor(target, persona, simpleClothing_, standardClothing_);
     }
 
+    /// @notice Changes the caller's persona name.
+    /// @dev The caller must already have a persona. The new normalized name must be valid and
+    ///      unused, unless it is already owned by the caller.
+    /// @param newName New desired name. It is normalized to lowercase before storage.
     function changeName(string memory newName) external {
         _changeNameFor(msg.sender, newName);
     }
 
+    /// @notice Changes `target`'s persona name using a signed authorization from `target`.
+    /// @dev Anyone may submit the transaction. The target signs the normalized new name,
+    ///      validity window, current nonce, signature scheme, and auth-data hash.
+    ///      A successful call increments `nonces[target]`.
+    /// @param target Account whose persona name is changed.
+    /// @param newName New desired name. It is normalized to lowercase before hashing/storage.
+    /// @param authorization Signature envelope and validity window.
     function changeNameFor(
         address target,
         string memory newName,
@@ -267,10 +340,22 @@ contract SemperlandPersona is Ownable {
         _changeNameFor(target, newName);
     }
 
+    /// @notice Registers a new trait lot.
+    /// @dev Owner-only. Lots are append-only: the new lot id is `nextLotId`, then `nextLotId`
+    ///      is incremented. `name` must be non-empty; `url` is intentionally opaque.
+    /// @param name Human-readable lot name. Empty names are invalid because emptiness marks absence.
+    /// @param url Opaque resolver URL, e.g. http(s), ipfs, or local.
+    /// @return lotId The id assigned to the newly registered lot.
     function registerTraitsLot(string memory name, string memory url) external onlyOwner returns (uint128 lotId) {
         lotId = _registerTraitsLot(name, url);
     }
 
+    /// @notice Updates metadata for an existing trait lot.
+    /// @dev Owner-only. This does not change trait availability, default-lot status, or per-account grants.
+    ///      `name` must be non-empty; `url` is intentionally opaque.
+    /// @param lotId Existing lot id.
+    /// @param name New non-empty lot name.
+    /// @param url New opaque resolver URL.
     function updateTraitsLot(uint128 lotId, string memory name, string memory url) external onlyOwner {
         _requireRegisteredLot(lotId);
         if (bytes(name).length == 0) revert InvalidName();
@@ -278,6 +363,15 @@ contract SemperlandPersona is Ownable {
         emit TraitsLotUpdated(lotId, name, url);
     }
 
+    /// @notice Adds allowed colors for a trait in an existing lot.
+    /// @dev Owner-only. Colors are merged with bitwise OR and never cleared by this method.
+    ///      `traitId` must be non-zero because item ids start at 1. `colors` must be a non-empty
+    ///      subset of `ALL_COLORS`.
+    /// @param lotId Existing lot id.
+    /// @param sex Sex dimension used by the renderer.
+    /// @param traitType Trait category.
+    /// @param traitId Trait item id inside the lot/category. Must be non-zero.
+    /// @param colors Bitset of colors being added.
     function addAvailableTraitColors(
         uint128 lotId,
         Sex sex,
@@ -288,30 +382,54 @@ contract SemperlandPersona is Ownable {
         _addAvailableTraitColors(lotId, sex, traitType, traitId, colors);
     }
 
+    /// @notice Sets whether a registered lot is available to every persona.
+    /// @dev Owner-only. The lot must already be registered. Disabling a default lot does not
+    ///      rewrite existing personas, but future registrations/updates will validate against
+    ///      the current default/per-account lot configuration.
+    /// @param lotId Existing lot id.
+    /// @param allowed Whether the lot is globally allowed.
     function setDefaultLot(uint128 lotId, bool allowed) external onlyOwner {
         _requireRegisteredLot(lotId);
         defaultLots[lotId] = allowed;
         emit DefaultLotSet(lotId, allowed);
     }
 
+    /// @notice Sets whether a registered lot is available to one account.
+    /// @dev Owner-only. This grant is additive with `defaultLots`.
+    /// @param account Account receiving or losing the lot grant.
+    /// @param lotId Existing lot id.
+    /// @param allowed Whether the lot is allowed for `account`.
     function setAllowedLot(address account, uint128 lotId, bool allowed) external onlyOwner {
         _requireRegisteredLot(lotId);
         allowedLots[account][lotId] = allowed;
         emit PersonaLotSet(account, lotId, allowed);
     }
 
+    /// @notice Returns whether an account has a registered persona.
+    /// @dev Presence is represented by a non-empty stored persona name.
+    /// @param account Account to check.
     function personaExists(address account) public view returns (bool) {
         return bytes(personas[account].name).length != 0;
     }
 
+    /// @notice Returns whether `lotId` is available to `account`.
+    /// @dev A lot is allowed if it is default or explicitly granted to the account.
+    /// @param account Account whose grants are checked.
+    /// @param lotId Lot id to check.
     function isLotAllowed(address account, uint128 lotId) public view returns (bool) {
         return defaultLots[lotId] || allowedLots[account][lotId];
     }
 
+    /// @notice Normalizes and validates a persona name without storing it.
+    /// @dev Valid names are 3 to 32 ASCII bytes, start with `[a-zA-Z_]`, and continue
+    ///      with `[a-zA-Z0-9_]`. Returned names are lowercase.
+    /// @param name Name to normalize.
     function normalizeName(string memory name) external pure returns (string memory) {
         return _normalizeName(name);
     }
 
+    /// @notice Returns the EIP-712 domain separator used by delegated methods.
+    /// @dev Recomputed if the chain id changes after deployment.
     function domainSeparator() external view returns (bytes32) {
         return _domainSeparatorV4();
     }
@@ -322,6 +440,8 @@ contract SemperlandPersona is Ownable {
         SimpleClothing[] memory simpleClothing_,
         StandardClothing[] memory standardClothing_
     ) private {
+        // Registration is one-time per account. The name reservation is written only after
+        // all persona and clothing validation succeeds.
         if (personaExists(target)) revert PersonaAlreadyRegistered(target);
 
         string memory normalizedName = _normalizeName(persona.name);
@@ -341,6 +461,8 @@ contract SemperlandPersona is Ownable {
         SimpleClothing[] memory simpleClothing_,
         StandardClothing[] memory standardClothing_
     ) private {
+        // Updates deliberately preserve the name. This prevents callers from accidentally
+        // bypassing the explicit name-change flow and its clearer UX/security expectations.
         if (!personaExists(target)) revert PersonaNotRegistered(target);
 
         persona.name = personas[target].name;
@@ -350,6 +472,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _changeNameFor(address target, string memory newName) private {
+        // Name ownership is keyed by normalized lowercase names. Reusing the same name with
+        // different casing is allowed only for the account that already owns it.
         if (!personaExists(target)) revert PersonaNotRegistered(target);
 
         string memory oldNormalizedName = personas[target].name;
@@ -372,6 +496,8 @@ contract SemperlandPersona is Ownable {
         SimpleClothing[] memory simpleClothing_,
         StandardClothing[] memory standardClothing_
     ) private {
+        // The selected clothing mode determines which auxiliary mapping is active.
+        // The inactive mapping is cleared so off-chain readers do not see stale clothing.
         _validatePersonaTraits(target, persona.sex, persona);
 
         if (persona.clothType == ClothType.Simple) {
@@ -390,6 +516,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _validatePersonaTraits(address target, Sex sex, Persona memory persona) private view {
+        // Body is validated by Solidity enum decoding. Wearable base traits are validated
+        // against available lot entries unless they are empty (`lotId == 0`).
         _validateTrait(target, sex, TraitType.Hair, persona.hair);
         _validateTrait(target, sex, TraitType.HairTail, persona.hairTail);
         _validateTrait(target, sex, TraitType.Necklace, persona.necklace);
@@ -397,6 +525,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _validateStandardClothing(address target, Sex sex, StandardClothing memory clothing) private view {
+        // Standard clothing has independent trait slots; each one may be empty or must
+        // resolve to a currently authorized lot/item/color combination.
         _validateTrait(target, sex, TraitType.Boots, clothing.boots);
         _validateTrait(target, sex, TraitType.Pants, clothing.pants);
         _validateTrait(target, sex, TraitType.Shirt, clothing.shirt);
@@ -409,11 +539,16 @@ contract SemperlandPersona is Ownable {
     }
 
     function _validateTrait(address target, Sex sex, TraitType traitType, Trait memory trait) private view {
+        // Lot 0 is the sentinel for "not worn". In that case item id and color are ignored.
         if (trait.lotId == 0) return;
+
+        // Non-empty traits must refer to an item id starting at 1 and a lot that is
+        // currently available either globally or to this specific account.
         if (trait.itemId == 0 || !isLotAllowed(target, trait.lotId)) {
             revert InvalidTrait(traitType, trait.lotId, trait.itemId, trait.color);
         }
 
+        // Color availability is encoded in the low ten bits of the lot entry.
         uint256 colors = availableTraits[trait.lotId][sex][traitType][trait.itemId];
         if ((colors & (1 << uint8(trait.color))) == 0) {
             revert InvalidTrait(traitType, trait.lotId, trait.itemId, trait.color);
@@ -421,6 +556,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _registerTraitsLot(string memory name, string memory url) private returns (uint128 lotId) {
+        // Empty names are forbidden because `bytes(lots[id].name).length == 0` is the
+        // contract-wide test for an unregistered lot.
         if (bytes(name).length == 0) revert InvalidName();
 
         lotId = nextLotId;
@@ -437,6 +574,8 @@ contract SemperlandPersona is Ownable {
         uint120 traitId,
         uint256 colors
     ) private {
+        // Trait availability is monotonic: new color flags are OR-merged into the
+        // existing bitset. Removal is intentionally absent from this simple registry.
         _requireRegisteredLot(lotId);
         if (traitId == 0) revert InvalidTrait(traitType, lotId, traitId, Color.Black);
         if (colors == 0 || (colors & ~ALL_COLORS) != 0) revert InvalidColors(colors);
@@ -448,6 +587,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _requireRegisteredLot(uint128 lotId) private view {
+        // The lot id space is append-only, so a non-empty name is enough to identify
+        // ids that were actually registered.
         if (bytes(lots[lotId].name).length == 0) revert InvalidLot(lotId);
     }
 
@@ -456,6 +597,8 @@ contract SemperlandPersona is Ownable {
         bytes32 structHash,
         SignatureAuthorization calldata authorization
     ) private {
+        // Delegated calls are valid only inside the signed time window. This keeps
+        // leaked or forgotten signatures from remaining usable forever.
         if (
             authorization.validSince > authorization.validUntil ||
             block.timestamp < authorization.validSince ||
@@ -467,6 +610,8 @@ contract SemperlandPersona is Ownable {
             revert UnsupportedSignatureScheme(authorization.signatureScheme);
         }
 
+        // The recovered ECDSA signer must be the target account. The nonce is consumed
+        // only after successful recovery, so failed attempts do not invalidate a signature.
         address signer = ECDSA.recover(_hashTypedDataV4(structHash), authorization.signature);
         if (signer != target) revert InvalidSignature();
 
@@ -480,6 +625,8 @@ contract SemperlandPersona is Ownable {
         StandardClothing[] memory standardClothing_,
         SignatureAuthorization calldata authorization
     ) private view returns (bytes32) {
+        // Registration signs the normalized name as part of the persona hash because
+        // choosing a name creates a unique global reservation.
         return _hashDelegatedClothingAction(
             REGISTER_TYPEHASH,
             target,
@@ -497,6 +644,8 @@ contract SemperlandPersona is Ownable {
         StandardClothing[] memory standardClothing_,
         SignatureAuthorization calldata authorization
     ) private view returns (bytes32) {
+        // Updates exclude the name from the persona hash because the update flow
+        // preserves names by design.
         return _hashDelegatedClothingAction(
             UPDATE_TYPEHASH,
             target,
@@ -512,6 +661,8 @@ contract SemperlandPersona is Ownable {
         string memory normalizedName,
         SignatureAuthorization calldata authorization
     ) private view returns (bytes32) {
+        // Name changes sign only the normalized name, keeping the action small and
+        // distinct from broader persona/clothing updates.
         Delegation memory delegation_ = _delegation(target, authorization);
         return keccak256(
             abi.encode(
@@ -531,6 +682,8 @@ contract SemperlandPersona is Ownable {
         address target,
         SignatureAuthorization calldata authorization
     ) private view returns (Delegation memory) {
+        // Snapshot the current nonce and auth-data hash into a compact struct so every
+        // delegated action uses the same replay/future-scheme fields.
         return Delegation({
             validSince: authorization.validSince,
             validUntil: authorization.validUntil,
@@ -548,6 +701,7 @@ contract SemperlandPersona is Ownable {
         bytes32 standardHash,
         Delegation memory delegation_
     ) private pure returns (bytes32) {
+        // Register/update share the same payload layout and differ only by type hash.
         return keccak256(
             abi.encode(
                 typeHash,
@@ -565,10 +719,14 @@ contract SemperlandPersona is Ownable {
     }
 
     function _hashTypedDataV4(bytes32 structHash) private view returns (bytes32) {
+        // Minimal EIP-712 v4 final digest. Implemented locally to keep the contract
+        // compatible with the project's current Paris EVM target.
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparatorV4(), structHash));
     }
 
     function _domainSeparatorV4() private view returns (bytes32) {
+        // If the chain id changes after deployment, recompute to preserve replay protection
+        // across forks.
         if (block.chainid == _domainChainId) return _domainSeparator;
         return _buildDomainSeparator();
     }
@@ -580,6 +738,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _normalizeName(string memory name) private pure returns (string memory) {
+        // Names are ASCII-only by construction because the validation works byte-by-byte.
+        // Length is bytes, not Unicode code points.
         bytes memory raw = bytes(name);
         uint256 length = raw.length;
         if (length < 3 || length > 32) revert InvalidName();
@@ -620,6 +780,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _hashPersona(Persona memory persona, bool includeName) private pure returns (bytes32) {
+        // `includeName` is true for registration and false for update, matching the
+        // external method semantics.
         return keccak256(
             abi.encode(
                 PERSONA_TYPEHASH,
@@ -636,6 +798,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _hashSimpleClothingArray(SimpleClothing[] memory clothing) private pure returns (bytes32) {
+        // Arrays are represented as the keccak of concatenated element struct hashes,
+        // mirroring EIP-712 array hashing.
         bytes32[] memory hashes = new bytes32[](clothing.length);
         for (uint256 i = 0; i < clothing.length; i++) {
             hashes[i] = keccak256(abi.encode(SIMPLE_CLOTHING_TYPEHASH, _hashTrait(clothing[i].cloth)));
@@ -644,6 +808,8 @@ contract SemperlandPersona is Ownable {
     }
 
     function _hashStandardClothingArray(StandardClothing[] memory clothing) private pure returns (bytes32) {
+        // Arrays are represented as the keccak of concatenated element struct hashes,
+        // mirroring EIP-712 array hashing.
         bytes32[] memory hashes = new bytes32[](clothing.length);
         for (uint256 i = 0; i < clothing.length; i++) {
             hashes[i] = keccak256(
